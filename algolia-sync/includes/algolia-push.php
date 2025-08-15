@@ -6,8 +6,7 @@ function algolia_sync_get_index_name($post_type) {
     // Manual mapping of post types to index names
     $index_mapping = [
         'blog' => 'Blog',
-        'post' => 'Posts',
-        'page' => 'Pages',
+        'resource' => 'Resource',
         // Add more mappings as needed
         // 'custom_post_type' => 'CustomIndexName',
     ];
@@ -18,32 +17,35 @@ function algolia_sync_get_index_name($post_type) {
 
 // Function to prepare comprehensive post data for Algolia
 function algolia_sync_prepare_post_data($post_id, $post) {
-    // Get all taxonomy terms
-    $blog_category_terms = get_the_terms($post_id, 'blog-category');
-    $blog_by_topic_terms = get_the_terms($post_id, 'blog-by-topic');
-    
-    // Get primary taxonomy terms from meta
-    $selected_primary_terms = get_post_meta($post_id, 'selected_primary_terms', true);
-    $primary_blog_category = null;
-    if (!empty($selected_primary_terms['blog-category'][0])) {
-        $primary_term_id = $selected_primary_terms['blog-category'][0];
-        $term = get_term_by('term_id', $primary_term_id, 'blog-category');
-        if ($term) {
-            $primary_blog_category = [
-                'name' => $term->name,
-                'slug' => $term->slug
-            ];
+    // Get all taxonomy terms dynamically based on post type
+    $taxonomies = get_object_taxonomies($post->post_type);
+    $taxonomy_terms = [];
+    if (!empty($taxonomies)) {
+        foreach ($taxonomies as $taxonomy) {
+            $terms = get_the_terms($post_id, $taxonomy);
+            if ($terms && !is_wp_error($terms)) {
+                $taxonomy_terms[$taxonomy] = $terms;
+            } else {
+                $taxonomy_terms[$taxonomy] = [];
+            }
         }
     }
-    $primary_blog_by_topic = null;
-    if (!empty($selected_primary_terms['blog-by-topic'][0])) {
-        $primary_term_id = $selected_primary_terms['blog-by-topic'][0];
-        $term = get_term_by('term_id', $primary_term_id, 'blog-by-topic');
-        if ($term) {
-            $primary_blog_by_topic = [
-                'name' => $term->name,
-                'slug' => $term->slug
-            ];
+    
+    // Get primary taxonomy terms from meta, dynamic by post type
+    $selected_primary_terms = get_post_meta($post_id, 'selected_primary_terms', true);
+    $primary_terms = [];
+    if (!empty($selected_primary_terms) && is_array($selected_primary_terms)) {
+        foreach ($taxonomies as $taxonomy) {
+            if (!empty($selected_primary_terms[$taxonomy][0])) {
+                $primary_term_id = $selected_primary_terms[$taxonomy][0];
+                $term = get_term_by('term_id', $primary_term_id, $taxonomy);
+                if ($term) {
+                    $primary_terms[$taxonomy] = [
+                        'name' => $term->name,
+                        'slug' => $term->slug
+                    ];
+                }
+            }
         }
     }
     
@@ -67,6 +69,14 @@ function algolia_sync_prepare_post_data($post_id, $post) {
     $hide_from_list_view = get_post_meta($post_id, 'hide_from_list_view', true);
 
     // Prepare comprehensive data array
+    $taxonomies_data = [];
+    foreach ($taxonomy_terms as $taxonomy => $terms) {
+        $taxonomies_data[$taxonomy] = [
+            'names' => array_map(function($t){ return $t->name; }, $terms),
+            'slugs' => array_map(function($t){ return $t->slug; }, $terms),
+        ];
+    }
+
     $data = [
         'objectID' => $post_id,
         'title' => sanitize_text_field(get_the_title($post_id)),
@@ -78,13 +88,8 @@ function algolia_sync_prepare_post_data($post_id, $post) {
         'image' => get_the_post_thumbnail_url($post_id, 'full'),
         'post_type' => $post->post_type,
         'status' => $post->post_status,
-        // Blog-specific taxonomy fields
-        'blog_category' => $blog_category_terms && !is_wp_error($blog_category_terms) ? array_map(function($t){return $t->name;}, $blog_category_terms) : [],
-        'blog_category_slugs' => $blog_category_terms && !is_wp_error($blog_category_terms) ? array_map(function($t){return $t->slug;}, $blog_category_terms) : [],
-        'blog_by_topic' => $blog_by_topic_terms && !is_wp_error($blog_by_topic_terms) ? array_map(function($t){return $t->name;}, $blog_by_topic_terms) : [],
-        'blog_by_topic_slugs' => $blog_by_topic_terms && !is_wp_error($blog_by_topic_terms) ? array_map(function($t){return $t->slug;}, $blog_by_topic_terms) : [],
-        'primary_blog_category' => $primary_blog_category,
-        'primary_blog_by_topic' => $primary_blog_by_topic,
+        'taxonomies' => $taxonomies_data,
+        'primary_terms' => $primary_terms,
         // Custom meta fields
         'show_custom_date' => $show_custom_date,
         'custom_date' => $custom_date,
